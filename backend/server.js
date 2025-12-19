@@ -4,112 +4,178 @@ const fetch = require('node-fetch');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
-const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ============================================
-// SEGURANÇA - Headers de Segurança
-// ============================================
-app.use(helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'"],
-            scriptSrc: ["'self'"],
-            imgSrc: ["'self'", "data:", "https:"],
-        },
-    },
-    crossOriginEmbedderPolicy: false // Necessário para alguns casos
-}));
-
-// ============================================
-// SEGURANÇA - Rate Limiting
-// ============================================
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 100, // máximo 100 requisições por IP
-    message: {
-        error: 'Muitas requisições deste IP, tente novamente em 15 minutos.',
-        retryAfter: 15
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
-
-// Rate limiting mais restritivo para endpoints de envio
-const strictLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 hora
-    max: 10, // máximo 10 envios por hora por IP
-    message: {
-        error: 'Limite de envios excedido. Tente novamente em 1 hora.',
-        retryAfter: 60
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
-
-// Aplicar rate limiting geral
-app.use('/api/', limiter);
-
-// ============================================
-// SEGURANÇA - CORS com Validação de Origem
-// ============================================
-// Lista de origens permitidas
-const allowedOrigins = process.env.FRONTEND_URL 
-    ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
-    : [];
-
-// Função para validar origem
-const corsOptions = {
-    origin: function (origin, callback) {
-        // Permitir requisições sem origem (mobile apps, Postman, etc) apenas em desenvolvimento
-        if (!origin && process.env.NODE_ENV !== 'production') {
-            return callback(null, true);
-        }
-        
-        // Em produção, bloquear requisições sem origem
-        if (!origin && process.env.NODE_ENV === 'production') {
-            return callback(new Error('Origem não permitida'));
-        }
-        
-        // Verificar se a origem está na lista permitida
-        if (allowedOrigins.length === 0) {
-            // Se não houver origens configuradas, permitir todas (apenas em desenvolvimento)
-            if (process.env.NODE_ENV === 'production') {
-                console.warn('⚠️  ATENÇÃO: FRONTEND_URL não configurado em produção! Permitindo todas as origens.');
+// Função para sanitizar logs e remover dados sensíveis
+function safeLogger(level, message, error = null) {
+    if (process.env.NODE_ENV === 'production') {
+        // Em produção, apenas logar mensagens genéricas
+        const safeMessage = message || 'Erro interno do servidor';
+        if (level === 'error') {
+            console.error(`[${new Date().toISOString()}] ${safeMessage}`);
+            if (error) {
+                // Logar apenas status code e tipo de erro, nunca o conteúdo
+                console.error(`[${new Date().toISOString()}] Status: ${error.status || 'N/A'}, Type: ${error.name || 'Error'}`);
             }
-            return callback(null, true);
-        }
-        
-        if (allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
+        } else if (level === 'warn') {
+            console.warn(`[${new Date().toISOString()}] ${safeMessage}`);
         } else {
-            console.warn(`⚠️  Tentativa de acesso bloqueada de origem: ${origin}`);
-            callback(new Error('Origem não permitida pelo CORS'));
+            console.log(`[${new Date().toISOString()}] ${safeMessage}`);
         }
-    },
-    credentials: true,
-    optionsSuccessStatus: 200,
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Token']
-};
+    } else {
+        // Em desenvolvimento, logar detalhes completos
+        if (level === 'error') {
+            console.error(message, error);
+        } else if (level === 'warn') {
+            console.warn(message);
+        } else {
+            console.log(message);
+        }
+    }
+}
 
-app.use(cors(corsOptions));
+// Configuração CORS - Allowlist por segurança
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS 
+    ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim())
+    : ['https://www.novasolidumfinance.com.br', 'https://novasolidumfinance.com.br'];
 
-// ============================================
-// Middleware para ocultar informações sensíveis
-// ============================================
+// Middleware CORS customizado com allowlist
 app.use((req, res, next) => {
-    // Remover headers sensíveis
-    res.removeHeader('X-Powered-By');
+    const origin = req.headers.origin;
+    
+    // Verificar se origin está na allowlist
+    if (origin && ALLOWED_ORIGINS.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+    }
+    
+    // Headers permitidos
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-auth-token');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    
+    // Responder a preflight requests
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    
     next();
 });
 
-app.use(express.json({ limit: '10mb' }));
+// Middleware de Security Headers
+app.use((req, res, next) => {
+    // Headers de segurança
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+    
+    // HSTS apenas em produção (HTTPS)
+    if (process.env.NODE_ENV === 'production' || req.secure || req.headers['x-forwarded-proto'] === 'https') {
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    }
+    
+    next();
+});
+
+app.use(express.json());
+
+// Rate Limiting - 5 requisições por minuto por IP
+const emailRateLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minuto
+    max: 5, // 5 requisições por IP
+    message: 'Muitas requisições. Por favor, tente novamente em alguns instantes.',
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Funções de validação
+function validateCPF(cpf) {
+    if (!cpf) return false;
+    cpf = cpf.replace(/[^\d]/g, '');
+    if (cpf.length !== 11) return false;
+    if (/^(\d)\1{10}$/.test(cpf)) return false; // Todos os dígitos iguais
+    
+    let sum = 0;
+    for (let i = 0; i < 9; i++) {
+        sum += parseInt(cpf.charAt(i)) * (10 - i);
+    }
+    let digit = 11 - (sum % 11);
+    if (digit >= 10) digit = 0;
+    if (digit !== parseInt(cpf.charAt(9))) return false;
+    
+    sum = 0;
+    for (let i = 0; i < 10; i++) {
+        sum += parseInt(cpf.charAt(i)) * (11 - i);
+    }
+    digit = 11 - (sum % 11);
+    if (digit >= 10) digit = 0;
+    if (digit !== parseInt(cpf.charAt(10))) return false;
+    
+    return true;
+}
+
+function validateCNPJ(cnpj) {
+    if (!cnpj) return false;
+    cnpj = cnpj.replace(/[^\d]/g, '');
+    if (cnpj.length !== 14) return false;
+    if (/^(\d)\1{13}$/.test(cnpj)) return false; // Todos os dígitos iguais
+    
+    let length = cnpj.length - 2;
+    let numbers = cnpj.substring(0, length);
+    const digits = cnpj.substring(length);
+    let sum = 0;
+    let pos = length - 7;
+    
+    for (let i = length; i >= 1; i--) {
+        sum += numbers.charAt(length - i) * pos--;
+        if (pos < 2) pos = 9;
+    }
+    let result = sum % 11 < 2 ? 0 : 11 - sum % 11;
+    if (result !== parseInt(digits.charAt(0))) return false;
+    
+    length = length + 1;
+    numbers = cnpj.substring(0, length);
+    sum = 0;
+    pos = length - 7;
+    for (let i = length; i >= 1; i--) {
+        sum += numbers.charAt(length - i) * pos--;
+        if (pos < 2) pos = 9;
+    }
+    result = sum % 11 < 2 ? 0 : 11 - sum % 11;
+    if (result !== parseInt(digits.charAt(1))) return false;
+    
+    return true;
+}
+
+function validateEmail(email) {
+    if (!email) return false;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) return false;
+    
+    // Validar domínio básico
+    const domain = email.split('@')[1];
+    if (!domain || domain.length < 4) return false;
+    if (!domain.includes('.')) return false;
+    
+    return true;
+}
+
+function validatePhone(phone) {
+    if (!phone) return false;
+    const phoneRegex = /^[\d\s\(\)\-\+]+$/;
+    if (!phoneRegex.test(phone)) return false;
+    
+    // Remover caracteres não numéricos
+    const digits = phone.replace(/\D/g, '');
+    // Telefone brasileiro: 10 ou 11 dígitos (com DDD)
+    return digits.length >= 10 && digits.length <= 11;
+}
 
 // Armazenamento temporário de tokens (em produção, use Redis ou banco de dados)
 const registrationTokens = new Map();
@@ -171,33 +237,30 @@ if (process.env.EMAIL_HOST && process.env.EMAIL_USER && process.env.EMAIL_PASS) 
     // Verificar conexão
     transporter.verify((error, success) => {
         if (error) {
-            console.error('❌ Erro na configuração do email:', error);
+            safeLogger('error', 'Erro na configuração do email', error);
         } else {
-            console.log('✅ Servidor de email configurado com sucesso!');
+            safeLogger('log', 'Servidor de email configurado com sucesso!');
         }
     });
 } else {
-    console.warn('⚠️  Configuração de email não encontrada. Configure EMAIL_HOST, EMAIL_USER e EMAIL_PASS no .env');
+    safeLogger('warn', 'Configuração de email não encontrada. Configure EMAIL_HOST, EMAIL_USER e EMAIL_PASS no .env');
 }
 
-// ============================================
-// ROTAS PÚBLICAS
-// ============================================
-
-// Rota de health check (sem informações sensíveis)
+// Rota de health check
 app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok',
-        timestamp: new Date().toISOString()
-    });
+    res.json({ status: 'ok', service: 'Tinify Proxy' });
 });
 
-// Rota GET para testar se o servidor está funcionando (sem expor endpoints)
+// Rota GET para testar se o servidor está funcionando
 app.get('/', (req, res) => {
     res.json({ 
         status: 'ok', 
-        service: 'Nova Solidum Backend',
-        version: '1.0.0'
+        service: 'Tinify Proxy Backend',
+        message: 'Servidor está rodando!',
+        endpoints: {
+            health: '/health',
+            compress: 'POST /api/tinify/compress'
+        }
     });
 });
 
@@ -211,7 +274,7 @@ app.get('/api/tinify/compress', (req, res) => {
 });
 
 // Rota para cadastro inicial (ETAPA 1) - sem documentos
-app.post('/api/register/initial', strictLimiter, async (req, res) => {
+app.post('/api/register/initial', async (req, res) => {
     try {
         // Verificar se email está configurado
         if (!transporter) {
@@ -316,21 +379,16 @@ app.post('/api/register/initial', strictLimiter, async (req, res) => {
 
         await transporter.sendMail(companyMailOptions);
 
-        // Não expor informações sensíveis na resposta
         res.json({
             success: true,
-            message: 'Cadastro realizado com sucesso! Verifique seu email para enviar os documentos.'
-            // Token enviado apenas por email, não na resposta HTTP
+            message: 'Cadastro realizado com sucesso! Verifique seu email para enviar os documentos.',
+            token: token
         });
 
     } catch (error) {
-        console.error('❌ Erro ao processar cadastro:', error);
-        // Não expor detalhes do erro em produção
         res.status(500).json({
             error: 'Erro ao processar cadastro',
-            message: process.env.NODE_ENV === 'production' 
-                ? 'Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.'
-                : error.message
+            message: 'Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.'
         });
     }
 });
@@ -374,7 +432,7 @@ app.get('/api/register/verify/:token', (req, res) => {
 });
 
 // Rota para envio de documentos (ETAPA 2) - requer token
-app.post('/api/register/documents', strictLimiter, verifyToken, uploadMultiple.fields([
+app.post('/api/register/documents', verifyToken, uploadMultiple.fields([
     { name: 'documentFront', maxCount: 1 },
     { name: 'documentBack', maxCount: 1 },
     { name: 'selfie', maxCount: 1 },
@@ -471,19 +529,15 @@ app.post('/api/register/documents', strictLimiter, verifyToken, uploadMultiple.f
         });
 
     } catch (error) {
-        console.error('❌ Erro ao enviar documentos:', error);
-        // Não expor detalhes do erro em produção
         res.status(500).json({
             error: 'Erro ao enviar documentos',
-            message: process.env.NODE_ENV === 'production' 
-                ? 'Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.'
-                : error.message
+            message: 'Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.'
         });
     }
 });
 
 // Rota para enviar email com anexos (LEGADO - mantida para compatibilidade)
-app.post('/api/email/send', strictLimiter, uploadMultiple.fields([
+app.post('/api/email/send', emailRateLimiter, uploadMultiple.fields([
     { name: 'documentFront', maxCount: 1 },
     { name: 'documentBack', maxCount: 1 },
     { name: 'selfie', maxCount: 1 },
@@ -504,9 +558,40 @@ app.post('/api/email/send', strictLimiter, uploadMultiple.fields([
             });
         }
 
+        // Verificar honeypot (campo oculto que bots preenchem)
+        if (req.body.honeypot && req.body.honeypot !== '') {
+            return res.status(400).json({ 
+                error: 'Requisição inválida',
+                message: 'Requisição bloqueada por segurança.'
+            });
+        }
+        
         // Extrair dados do formulário
         const formData = JSON.parse(req.body.formData || '{}');
         const accountType = formData.accountType || 'PF';
+        
+        // Validações de dados
+        if (accountType === 'PF') {
+            if (formData.cpf && !validateCPF(formData.cpf)) {
+                return res.status(400).json({ error: 'CPF inválido' });
+            }
+            if (formData.email && !validateEmail(formData.email)) {
+                return res.status(400).json({ error: 'Email inválido' });
+            }
+            if (formData.phone && !validatePhone(formData.phone)) {
+                return res.status(400).json({ error: 'Telefone inválido' });
+            }
+        } else {
+            if (formData.cnpj && !validateCNPJ(formData.cnpj)) {
+                return res.status(400).json({ error: 'CNPJ inválido' });
+            }
+            if (formData.companyEmail && !validateEmail(formData.companyEmail)) {
+                return res.status(400).json({ error: 'Email inválido' });
+            }
+            if (formData.companyPhone && !validatePhone(formData.companyPhone)) {
+                return res.status(400).json({ error: 'Telefone inválido' });
+            }
+        }
         
         // Preparar anexos
         const attachments = [];
@@ -572,20 +657,18 @@ app.post('/api/email/send', strictLimiter, uploadMultiple.fields([
 
         await transporter.sendMail(userMailOptions);
 
-        // Não expor informações sensíveis (emailId, etc)
         res.json({
             success: true,
-            message: 'Emails enviados com sucesso!'
+            message: 'Emails enviados com sucesso!',
+            attachmentsCount: attachments.length,
+            emailId: emailResult.messageId
         });
 
     } catch (error) {
-        console.error('❌ Erro ao enviar email:', error);
-        // Não expor detalhes do erro em produção
+        safeLogger('error', 'Erro ao enviar email', error);
         res.status(500).json({
             error: 'Erro ao enviar email',
-            message: process.env.NODE_ENV === 'production' 
-                ? 'Ocorreu um erro ao enviar o email. Tente novamente mais tarde.'
-                : error.message
+            message: 'Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.'
         });
     }
 });
@@ -765,13 +848,10 @@ app.post('/api/tinify/compress', upload.single('image'), async (req, res) => {
         });
 
     } catch (error) {
-        console.error('❌ Erro ao comprimir imagem:', error);
-        // Não expor detalhes do erro em produção
+        safeLogger('error', 'Erro ao comprimir imagem', error);
         res.status(500).json({ 
             error: 'Erro interno do servidor',
-            message: process.env.NODE_ENV === 'production' 
-                ? 'Ocorreu um erro ao processar a imagem. Tente novamente mais tarde.'
-                : error.message
+            message: 'Ocorreu um erro ao processar a imagem. Tente novamente mais tarde.'
         });
     }
 });
@@ -782,17 +862,17 @@ module.exports = app;
 // Iniciar servidor apenas se não estiver no Vercel
 if (process.env.VERCEL !== '1' && !process.env.VERCEL_ENV) {
     app.listen(PORT, () => {
-        console.log(`🚀 Servidor Backend rodando na porta ${PORT}`);
-        console.log(`📡 Health check: http://localhost:${PORT}/health`);
-        console.log(`🔧 Tinify: http://localhost:${PORT}/api/tinify/compress`);
-        console.log(`📧 Email: http://localhost:${PORT}/api/email/send`);
+        safeLogger('log', `Servidor Backend rodando na porta ${PORT}`);
+        safeLogger('log', `Health check: http://localhost:${PORT}/health`);
+        safeLogger('log', `Tinify: http://localhost:${PORT}/api/tinify/compress`);
+        safeLogger('log', `Email: http://localhost:${PORT}/api/email/send`);
         
         if (!process.env.TINIFY_API_KEY) {
-            console.warn('⚠️  TINIFY_API_KEY não configurada! Configure no arquivo .env');
+            safeLogger('warn', 'TINIFY_API_KEY não configurada! Configure no arquivo .env');
         }
         
         if (!transporter) {
-            console.warn('⚠️  Servidor de email não configurado! Configure EMAIL_HOST, EMAIL_USER e EMAIL_PASS no .env');
+            safeLogger('warn', 'Servidor de email não configurado! Configure EMAIL_HOST, EMAIL_USER e EMAIL_PASS no .env');
         }
     });
 }
