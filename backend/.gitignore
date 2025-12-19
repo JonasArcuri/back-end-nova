@@ -8,6 +8,11 @@ yarn-error.log*
 .env
 .env.local
 .env.production
+.env.development
+
+# Config files with sensitive data
+config.js
+config.local.js
 
 # Logs
 logs/
@@ -30,4 +35,7 @@ Thumbs.db
 dist/
 build/
 .vercel
-.env*.local
+
+# Frontend config (se houver)
+frontend/.env.local
+frontend/config.js

@@ -1,6 +1,13 @@
 # Configuração do Servidor
 PORT=3000
+
+# URL do Frontend para CORS (OBRIGATÓRIO em produção)
+# Pode conter múltiplas URLs separadas por vírgula
+# Exemplo: https://www.novasolidumfinance.com.br,https://novasolidumfinance.com.br
 FRONTEND_URL=http://localhost:5500
+
+# Ambiente (production, development)
+NODE_ENV=development
 
 # Configuração do Tinify (opcional)
 TINIFY_API_KEY=sua_api_key_do_tinify_aqui
