@@ -84,6 +84,7 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Rate Limiting - 5 requisições por minuto por IP
 const emailRateLimiter = rateLimit({
@@ -536,30 +537,6 @@ app.post('/api/register/documents', verifyToken, uploadMultiple.fields([
     }
 });
 
-// Middleware para tratar erros do multer
-const handleMulterError = (err, req, res, next) => {
-    if (err instanceof multer.MulterError) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({
-                error: 'Arquivo muito grande',
-                message: 'O tamanho máximo permitido é 10MB por arquivo.'
-            });
-        }
-        if (err.code === 'LIMIT_FIELD_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
-            return res.status(400).json({
-                error: 'Erro no upload',
-                message: 'Erro ao processar os arquivos enviados.'
-            });
-        }
-        safeLogger('error', 'Erro do multer', err);
-        return res.status(400).json({
-            error: 'Erro no upload',
-            message: 'Erro ao processar os arquivos.'
-        });
-    }
-    next(err);
-};
-
 // Rota para enviar email com anexos (LEGADO - mantida para compatibilidade)
 app.post('/api/email/send', emailRateLimiter, uploadMultiple.fields([
     { name: 'documentFront', maxCount: 1 },
@@ -572,18 +549,8 @@ app.post('/api/email/send', emailRateLimiter, uploadMultiple.fields([
     { name: 'adminIdBack', maxCount: 1 },
     { name: 'companyProofOfAddress', maxCount: 1 },
     { name: 'ecnpjCertificate', maxCount: 1 }
-]), handleMulterError, async (req, res) => {
+]), async (req, res) => {
     try {
-        // Log de debug (apenas em desenvolvimento)
-        if (process.env.NODE_ENV !== 'production') {
-            safeLogger('log', 'Requisição recebida:', {
-                bodyKeys: Object.keys(req.body),
-                hasFiles: !!req.files,
-                filesCount: req.files ? Object.keys(req.files).length : 0,
-                contentType: req.headers['content-type']
-            });
-        }
-        
         // Verificar se email está configurado
         if (!transporter) {
             return res.status(500).json({ 
@@ -593,70 +560,71 @@ app.post('/api/email/send', emailRateLimiter, uploadMultiple.fields([
         }
 
         // Verificar honeypot (campo oculto que bots preenchem)
-        if (req.body.honeypot && req.body.honeypot !== '') {
-            safeLogger('warn', 'Tentativa bloqueada: honeypot preenchido');
+        // O honeypot vem como campo de texto no FormData, acessível via req.body
+        const honeypotValue = req.body.honeypot || '';
+        if (honeypotValue && honeypotValue.trim() !== '') {
+            safeLogger('warn', 'Tentativa de envio bloqueada por honeypot');
             return res.status(400).json({ 
                 error: 'Requisição inválida',
                 message: 'Requisição bloqueada por segurança.'
             });
         }
         
-        // Extrair dados do formulário com tratamento de erro
+        // Extrair dados do formulário
+        if (!req.body.formData) {
+            return res.status(400).json({ 
+                error: 'Dados do formulário não fornecidos',
+                message: 'O campo formData é obrigatório.'
+            });
+        }
+        
         let formData;
         try {
-            formData = typeof req.body.formData === 'string' 
-                ? JSON.parse(req.body.formData) 
-                : (req.body.formData || {});
+            formData = JSON.parse(req.body.formData);
         } catch (parseError) {
             safeLogger('error', 'Erro ao fazer parse do formData', parseError);
             return res.status(400).json({ 
-                error: 'Dados inválidos',
-                message: 'Formato de dados do formulário inválido.'
+                error: 'Dados do formulário inválidos',
+                message: 'Formato JSON inválido.'
             });
         }
         
         const accountType = formData.accountType || 'PF';
         
-        // Validações de dados (apenas se os campos existirem e não estiverem vazios)
+        // Validações de dados - apenas validar se o campo existir e não estiver vazio
         if (accountType === 'PF') {
-            if (formData.cpf && formData.cpf.trim() !== '' && !validateCPF(formData.cpf)) {
-                safeLogger('warn', `CPF inválido recebido: ${formData.cpf.substring(0, 3)}***`);
-                return res.status(400).json({ 
-                    error: 'CPF inválido',
-                    message: 'Por favor, verifique o CPF informado.'
-                });
+            if (formData.cpf && formData.cpf.trim() !== '') {
+                const cpfClean = formData.cpf.replace(/[^\d]/g, '');
+                if (cpfClean.length > 0 && !validateCPF(formData.cpf)) {
+                    return res.status(400).json({ error: 'CPF inválido', field: 'cpf' });
+                }
             }
-            if (formData.email && formData.email.trim() !== '' && !validateEmail(formData.email)) {
-                return res.status(400).json({ 
-                    error: 'Email inválido',
-                    message: 'Por favor, verifique o email informado.'
-                });
+            if (formData.email && formData.email.trim() !== '') {
+                if (!validateEmail(formData.email)) {
+                    return res.status(400).json({ error: 'Email inválido', field: 'email' });
+                }
             }
-            if (formData.phone && formData.phone.trim() !== '' && !validatePhone(formData.phone)) {
-                return res.status(400).json({ 
-                    error: 'Telefone inválido',
-                    message: 'Por favor, verifique o telefone informado.'
-                });
+            if (formData.phone && formData.phone.trim() !== '') {
+                if (!validatePhone(formData.phone)) {
+                    return res.status(400).json({ error: 'Telefone inválido', field: 'phone' });
+                }
             }
         } else {
-            if (formData.cnpj && formData.cnpj.trim() !== '' && !validateCNPJ(formData.cnpj)) {
-                safeLogger('warn', `CNPJ inválido recebido: ${formData.cnpj.substring(0, 2)}***`);
-                return res.status(400).json({ 
-                    error: 'CNPJ inválido',
-                    message: 'Por favor, verifique o CNPJ informado.'
-                });
+            if (formData.cnpj && formData.cnpj.trim() !== '') {
+                const cnpjClean = formData.cnpj.replace(/[^\d]/g, '');
+                if (cnpjClean.length > 0 && !validateCNPJ(formData.cnpj)) {
+                    return res.status(400).json({ error: 'CNPJ inválido', field: 'cnpj' });
+                }
             }
-            if (formData.companyEmail && formData.companyEmail.trim() !== '' && !validateEmail(formData.companyEmail)) {
-                return res.status(400).json({ 
-                    error: 'Email inválido',
-                    message: 'Por favor, verifique o email informado.'
-                });
+            if (formData.companyEmail && formData.companyEmail.trim() !== '') {
+                if (!validateEmail(formData.companyEmail)) {
+                    return res.status(400).json({ error: 'Email inválido', field: 'companyEmail' });
+                }
             }
-            if (formData.companyPhone && formData.companyPhone.trim() !== '' && !validatePhone(formData.companyPhone)) {
-                return res.status(400).json({ 
-                    error: 'Telefone inválido',
-                    message: 'Por favor, verifique o telefone informado.'
-                });
+            if (formData.companyPhone && formData.companyPhone.trim() !== '') {
+                if (!validatePhone(formData.companyPhone)) {
+                    return res.status(400).json({ error: 'Telefone inválido', field: 'companyPhone' });
+                }
             }
         }
         
@@ -733,15 +701,9 @@ app.post('/api/email/send', emailRateLimiter, uploadMultiple.fields([
 
     } catch (error) {
         safeLogger('error', 'Erro ao enviar email', error);
-        
-        // Retornar mensagem de erro mais específica em desenvolvimento
-        const errorMessage = process.env.NODE_ENV === 'production'
-            ? 'Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.'
-            : error.message || 'Erro desconhecido';
-        
         res.status(500).json({
             error: 'Erro ao enviar email',
-            message: errorMessage
+            message: 'Ocorreu um erro ao processar sua solicitação. Tente novamente mais tarde.'
         });
     }
 });
