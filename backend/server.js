@@ -190,8 +190,11 @@ function validatePhone(phone) {
     
     // Remover caracteres não numéricos
     const digits = phone.replace(/\D/g, '');
-    // Telefone brasileiro: 10 ou 11 dígitos (com DDD)
-    return digits.length >= 10 && digits.length <= 11;
+    // Telefone brasileiro: 
+    // - Com código do país (+55): 12 ou 13 dígitos (55 + DDD + número)
+    // - Sem código do país: 10 ou 11 dígitos (DDD + número)
+    // Aceitar de 10 a 13 dígitos para cobrir ambos os casos
+    return digits.length >= 10 && digits.length <= 13;
 }
 
 // Função para sanitizar HTML e prevenir XSS
@@ -225,8 +228,10 @@ function validateAndSanitizeFormData(formData, accountType) {
     const errors = [];
     
     if (accountType === 'PF') {
-        // Validar campos obrigatórios
-        if (!formData.fullName || !formData.email || !formData.phone) {
+        // Validar campos obrigatórios (verificar se existem e não são strings vazias)
+        if (!formData.fullName || formData.fullName.trim() === '' || 
+            !formData.email || formData.email.trim() === '' || 
+            !formData.phone || formData.phone.trim() === '') {
             return { valid: false, errors: ['Campos obrigatórios faltando'] };
         }
         
@@ -259,8 +264,11 @@ function validateAndSanitizeFormData(formData, accountType) {
         if (formData.cnh) formData.cnh = escapeHtml(formData.cnh);
         
     } else if (accountType === 'PJ') {
-        // Validar campos obrigatórios
-        if (!formData.companyName || !formData.companyEmail || !formData.companyPhone || !formData.cnpj) {
+        // Validar campos obrigatórios (verificar se existem e não são strings vazias)
+        if (!formData.companyName || formData.companyName.trim() === '' || 
+            !formData.companyEmail || formData.companyEmail.trim() === '' || 
+            !formData.companyPhone || formData.companyPhone.trim() === '' || 
+            !formData.cnpj || formData.cnpj.trim() === '') {
             return { valid: false, errors: ['Campos obrigatórios faltando'] };
         }
         
