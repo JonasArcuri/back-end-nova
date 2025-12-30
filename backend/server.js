@@ -351,6 +351,27 @@ app.post('/api/register/initial', async (req, res) => {
 
         // Enviar notificação para empresa
         const companyEmail = process.env.COMPANY_EMAIL || 'novasolidum@gmail.com';
+        
+        // Preparar campos de CEP e endereço
+        let cepField = '';
+        let addressField = '';
+        
+        if (accountType === 'PF') {
+            if (formData.cep || formData.zipCode) {
+                cepField = `<p><strong>CEP:</strong> ${formData.cep || formData.zipCode}</p>`;
+            }
+            if (formData.address || formData.endereco || formData.street || formData.rua) {
+                addressField = `<p><strong>Endereço:</strong> ${formData.address || formData.endereco || formData.street || formData.rua}</p>`;
+            }
+        } else {
+            if (formData.companyCep || formData.companyZipCode || formData.cep || formData.zipCode) {
+                cepField = `<p><strong>CEP:</strong> ${formData.companyCep || formData.companyZipCode || formData.cep || formData.zipCode}</p>`;
+            }
+            if (formData.companyAddress || formData.companyEndereco || formData.address || formData.endereco || formData.street || formData.rua) {
+                addressField = `<p><strong>Endereço:</strong> ${formData.companyAddress || formData.companyEndereco || formData.address || formData.endereco || formData.street || formData.rua}</p>`;
+            }
+        }
+        
         const companyNotificationHtml = `
             <!DOCTYPE html>
             <html lang="pt-BR">
@@ -364,6 +385,8 @@ app.post('/api/register/initial', async (req, res) => {
                     <p><strong>Tipo:</strong> ${accountType}</p>
                     <p><strong>Nome/Empresa:</strong> ${userName}</p>
                     <p><strong>Email:</strong> ${userEmail}</p>
+                    ${cepField}
+                    ${addressField}
                     <p>O usuário receberá um email com link para envio de documentos.</p>
                 </div>
             </body>
@@ -686,11 +709,15 @@ function buildEmailHTML(formData, accountType, attachmentsCount) {
         if (formData.cpf) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">CPF:</span><span style="color: #1a2744; font-size: 14px;">${formData.cpf}</span></td></tr>`;
         if (formData.email) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">Email:</span><span style="color: #1a2744; font-size: 14px;">${formData.email}</span></td></tr>`;
         if (formData.phone) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">Telefone:</span><span style="color: #1a2744; font-size: 14px;">${formData.phone}</span></td></tr>`;
+        if (formData.cep || formData.zipCode) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">CEP:</span><span style="color: #1a2744; font-size: 14px;">${formData.cep || formData.zipCode}</span></td></tr>`;
+        if (formData.address || formData.endereco || formData.street || formData.rua) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">Endereço:</span><span style="color: #1a2744; font-size: 14px;">${formData.address || formData.endereco || formData.street || formData.rua}</span></td></tr>`;
     } else {
         if (formData.companyName) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">Razão Social:</span><span style="color: #1a2744; font-size: 14px;">${formData.companyName}</span></td></tr>`;
         if (formData.cnpj) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">CNPJ:</span><span style="color: #1a2744; font-size: 14px;">${formData.cnpj}</span></td></tr>`;
         if (formData.companyEmail) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">Email:</span><span style="color: #1a2744; font-size: 14px;">${formData.companyEmail}</span></td></tr>`;
         if (formData.companyPhone) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">Telefone:</span><span style="color: #1a2744; font-size: 14px;">${formData.companyPhone}</span></td></tr>`;
+        if (formData.companyCep || formData.companyZipCode || formData.cep || formData.zipCode) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">CEP:</span><span style="color: #1a2744; font-size: 14px;">${formData.companyCep || formData.companyZipCode || formData.cep || formData.zipCode}</span></td></tr>`;
+        if (formData.companyAddress || formData.companyEndereco || formData.address || formData.endereco || formData.street || formData.rua) html += `<tr><td style="padding: 12px 0; border-bottom: 1px solid #e5e7eb;"><span style="color: #6b7280; font-size: 14px; font-weight: 600; display: inline-block; width: 180px;">Endereço:</span><span style="color: #1a2744; font-size: 14px;">${formData.companyAddress || formData.companyEndereco || formData.address || formData.endereco || formData.street || formData.rua}</span></td></tr>`;
     }
 
     html += `
